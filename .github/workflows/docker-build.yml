@@ -1,0 +1,48 @@
+name: Docker Build
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+    
+      # 도커 허브에 로그인하여 이미지를 푸시할 수 있도록 설정
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }} # 아래에서 이미지 경로 지정해줄 때 또 사용한다
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Dockerfile이 있는 경로에서 도커 이미지를 빌드하고 도커 허브에 푸시
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE }}/${{ secrets.DOCKER_IMAGE_TAG }} # 도커 허브에 업로드할 이미지 경로. => reoyuza/nginx:1.29.5-alpine
+      
+      # AWS SSM을 통해 EC2 인스턴스에 도커 컨테이너를 배포하기 위한 AWS 자격 증명 구성
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      # AWS SSM을 사용하여 EC2 인스턴스에 도커 컨테이너를 배포하는 단계. 도커 허브에서 이미지를 가져와 실행하도록 명령을 보낸다.
+      - name: Deploy to AWS SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+                "docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}",
+                "docker stop nginx-container || true",
+                "docker rm nginx-container || true",
+                "docker run -d -p 80:80 --name nginx-container ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE }}:${{ secrets.DOCKER_IMAGE_TAG }}"
+            ]' \
+            --region ${{ secrets.AWS_REGION }}
